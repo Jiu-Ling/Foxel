@@ -4,6 +4,7 @@ Utility functions shared across storage adapters.
 from typing import List, Dict, Tuple, Any
 import asyncio
 from pathlib import Path
+from urllib.parse import quote
 from fastapi import HTTPException
 
 
@@ -132,7 +133,6 @@ def build_stream_headers(
         headers["Content-Length"] = str(file_size)
     
     if filename:
-        from urllib.parse import quote
         headers["Content-Disposition"] = f'inline; filename="{quote(filename)}"'
     
     return headers
@@ -151,9 +151,17 @@ async def extract_exif_data(file_path: Path) -> Dict[str, str] | None:
     try:
         from PIL import Image
         img = await asyncio.to_thread(Image.open, file_path)
-        exif_data = img._getexif()
-        if exif_data:
-            return {str(k): str(v) for k, v in exif_data.items()}
+        
+        # Try using the public API first (PIL >= 8.0)
+        if hasattr(img, 'getexif'):
+            exif_data = img.getexif()
+            if exif_data:
+                return {str(k): str(v) for k, v in exif_data.items()}
+        # Fallback to private API for older PIL versions
+        elif hasattr(img, '_getexif'):
+            exif_data = img._getexif()
+            if exif_data:
+                return {str(k): str(v) for k, v in exif_data.items()}
     except Exception:
         pass
     return None
