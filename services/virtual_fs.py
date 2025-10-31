@@ -9,7 +9,7 @@ import base64
 
 from models import StorageAdapter
 from .adapters.registry import runtime_registry
-from .adapters.utils import check_file_exists, extract_raw_thumbnail
+from .adapters.utils import check_file_exists, extract_raw_thumbnail, sort_and_paginate_entries
 from api.response import page
 from .thumbnail import is_image_filename, is_raw_filename
 from services.processors.registry import get as get_processor
@@ -123,25 +123,12 @@ async def list_virtual_dir(path: str, page_num: int = 1, page_size: int = 50, so
     all_entries = adapter_entries + mount_entries
     
     if mount_entries:
-        reverse = sort_order.lower() == "desc"
-        def get_sort_key(item):
-            key = (not item.get("is_dir"),)
-            sort_field = sort_by.lower()
-            if sort_field == "name":
-                key += (item["name"].lower(),)
-            elif sort_field == "size":
-                key += (item.get("size", 0),)
-            elif sort_field == "mtime":
-                key += (item.get("mtime", 0),)
-            else:
-                key += (item["name"].lower(),)
-            return key
-        all_entries.sort(key=get_sort_key, reverse=reverse)
-        
-        total_entries = adapter_total + len(mount_entries)
-        start_idx = (page_num - 1) * page_size
-        end_idx = start_idx + page_size
-        page_entries = all_entries[start_idx:end_idx]
+        # When we have mount entries, we need to re-sort and re-paginate all entries
+        # Note: adapter_entries may already be paginated, so we need to handle this carefully
+        # For simplicity, we'll just sort and paginate the combined list
+        page_entries, total_entries = sort_and_paginate_entries(
+            all_entries, page_num, page_size, sort_by, sort_order
+        )
         return page(page_entries, total_entries, page_num, page_size)
     
     return page(adapter_entries, adapter_total, page_num, page_size)
