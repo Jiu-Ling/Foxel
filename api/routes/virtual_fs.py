@@ -16,6 +16,7 @@ from services.virtual_fs import (
     generate_temp_link_token,
     verify_temp_link_token,
 )
+from services.adapters.utils import check_file_exists
 from services.thumbnail import is_image_filename, get_or_create_thumb, is_raw_filename
 from schemas import MkdirRequest, MoveRequest
 from api.response import success
@@ -281,15 +282,9 @@ async def upload_stream(
         raise HTTPException(400, detail="Path must be a file")
     from services.virtual_fs import write_file_stream, resolve_adapter_and_rel
     adapter, _m, root, rel = await resolve_adapter_and_rel(full_path)
-    exists_func = getattr(adapter, "exists", None)
-    if not overwrite and callable(exists_func):
-        try:
-            if await exists_func(root, rel):
-                raise HTTPException(409, detail="Destination exists")
-        except HTTPException:
-            raise
-        except Exception:
-            pass
+    
+    # Check if file exists using shared utility
+    await check_file_exists(adapter, root, rel, overwrite)
 
     async def gen():
         while True:

@@ -11,6 +11,12 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse, Response
 from models import StorageAdapter
 from services.logging import LogService
+from services.adapters.utils import (
+    sort_and_paginate_entries,
+    parse_range_header,
+    build_stream_headers,
+    extract_exif_data,
+)
 
 
 def _safe_join(root: str, rel: str) -> Path:
@@ -73,34 +79,8 @@ class LocalAdapter:
                 "type": "dir" if is_dir else "file",
             })
 
-        # 排序
-        reverse = sort_order.lower() == "desc"
-        
-        def get_sort_key(item):
-            # 基础排序键，目录优先
-            key = (not item["is_dir"],)
-            sort_field = sort_by.lower()
-            
-            if sort_field == "name":
-                key += (item["name"].lower(),)
-            elif sort_field == "size":
-                key += (item["size"],)
-            elif sort_field == "mtime":
-                key += (item["mtime"],)
-            else: # 默认按名称
-                key += (item["name"].lower(),)
-            return key
-
-        entries.sort(key=get_sort_key, reverse=reverse)
-        
-        total_count = len(entries)
-        
-        # 分页
-        start_idx = (page_num - 1) * page_size
-        end_idx = start_idx + page_size
-        page_entries = entries[start_idx:end_idx]
-        
-        return page_entries, total_count
+        # Sort and paginate entries using shared utility
+        return sort_and_paginate_entries(entries, page_num, page_size, sort_by, sort_order)
 
     async def read_file(self, root: str, rel: str) -> bytes:
         fp = _safe_join(root, rel)
@@ -275,32 +255,17 @@ class LocalAdapter:
         mime, _ = mimetypes.guess_type(rel)
         content_type = mime or "application/octet-stream"
         file_size = (await asyncio.to_thread(fp.stat)).st_size
-        start = 0
-        end = file_size - 1
-        status = 200
-        headers = {
-            "Accept-Ranges": "bytes",
-            "Content-Type": content_type,
-        }
-        if range_header and range_header.startswith("bytes="):
-            try:
-                part = range_header.removeprefix("bytes=")
-                s, e = part.split("-", 1)
-                if s.strip():
-                    start = int(s)
-                if e.strip():
-                    end = int(e)
-                if start >= file_size:
-                    raise HTTPException(416, detail="Requested Range Not Satisfiable")
-                if end >= file_size:
-                    end = file_size - 1
-                status = 206
-            except ValueError:
-                raise HTTPException(400, detail="Invalid Range header")
-            headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
-            headers["Content-Length"] = str(end - start + 1)
-        else:
-            headers["Content-Length"] = str(file_size)
+        
+        # Parse range header using shared utility
+        try:
+            start, end, status, is_partial = parse_range_header(range_header, file_size)
+        except ValueError:
+            raise HTTPException(400, detail="Invalid Range header")
+        except IndexError:
+            raise HTTPException(416, detail="Requested Range Not Satisfiable")
+        
+        # Build headers using shared utility
+        headers = build_stream_headers(content_type, file_size, start, end, is_partial)
 
         async def iterator():
             # 使用线程池避免阻塞
@@ -341,14 +306,7 @@ class LocalAdapter:
         if not fp.is_dir():
             mime, _ = mimetypes.guess_type(fp.name)
             if mime and mime.startswith("image/"):
-                try:
-                    from PIL import Image
-                    img = await asyncio.to_thread(Image.open, fp)
-                    exif_data = img._getexif()
-                    if exif_data:
-                        exif = {str(k): str(v) for k, v in exif_data.items()}
-                except Exception:
-                    exif = None
+                exif = await extract_exif_data(fp)
         info["exif"] = exif
         return info
 

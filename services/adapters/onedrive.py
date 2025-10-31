@@ -5,6 +5,11 @@ import httpx
 from fastapi.responses import StreamingResponse
 from fastapi import HTTPException
 from models import StorageAdapter
+from services.adapters.utils import (
+    sort_and_paginate_entries,
+    parse_range_header,
+    build_stream_headers,
+)
 
 MS_GRAPH_URL = "https://graph.microsoft.com/v1.0"
 MS_OAUTH_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
@@ -152,27 +157,8 @@ class OneDriveAdapter:
 
         formatted_items = [self._format_item(item) for item in all_items]
         
-        # 排序
-        reverse = sort_order.lower() == "desc"
-        def get_sort_key(item):
-            key = (not item["is_dir"],)
-            sort_field = sort_by.lower()
-            if sort_field == "name":
-                key += (item["name"].lower(),)
-            elif sort_field == "size":
-                key += (item["size"],)
-            elif sort_field == "mtime":
-                key += (item["mtime"],)
-            else:
-                key += (item["name"].lower(),)
-            return key
-        formatted_items.sort(key=get_sort_key, reverse=reverse)
-
-        total_count = len(formatted_items)
-        start_idx = (page_num - 1) * page_size
-        end_idx = start_idx + page_size
-
-        return formatted_items[start_idx:end_idx], total_count
+        # Sort and paginate entries using shared utility
+        return sort_and_paginate_entries(formatted_items, page_num, page_size, sort_by, sort_order)
 
     async def read_file(self, root: str, rel: str) -> bytes:
         """
@@ -339,35 +325,17 @@ class OneDriveAdapter:
         content_type = item_data.get("file", {}).get(
             "mimeType", "application/octet-stream")
 
-        start = 0
-        end = file_size - 1
-        status = 200
-        headers = {
-            "Accept-Ranges": "bytes",
-            "Content-Type": content_type,
-            "Content-Disposition": f"inline; filename=\"{item_data.get('name')}\""
-        }
-
-        if range_header and range_header.startswith("bytes="):
-            try:
-                part = range_header.removeprefix("bytes=")
-                s, e = part.split("-", 1)
-                if s.strip():
-                    start = int(s)
-                if e.strip():
-                    end = int(e)
-                if start >= file_size:
-                    raise HTTPException(416, "Requested Range Not Satisfiable")
-                if end >= file_size:
-                    end = file_size - 1
-                status = 206
-            except ValueError:
-                raise HTTPException(400, "Invalid Range header")
-
-            headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
-            headers["Content-Length"] = str(end - start + 1)
-        else:
-            headers["Content-Length"] = str(file_size)
+        # Parse range header using shared utility
+        try:
+            start, end, status, is_partial = parse_range_header(range_header, file_size)
+        except ValueError:
+            raise HTTPException(400, "Invalid Range header")
+        except IndexError:
+            raise HTTPException(416, "Requested Range Not Satisfiable")
+        
+        # Build headers using shared utility
+        filename = item_data.get('name')
+        headers = build_stream_headers(content_type, file_size, start, end, is_partial, filename)
 
         async def file_iterator():
             nonlocal start, end

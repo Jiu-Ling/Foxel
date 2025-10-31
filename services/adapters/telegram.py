@@ -6,6 +6,7 @@ from models import StorageAdapter
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 import socks
+from services.adapters.utils import sort_and_paginate_entries
 
 # 适配器类型标识
 ADAPTER_TYPE = "Telegram"
@@ -113,30 +114,8 @@ class TelegramAdapter:
             if client.is_connected():
                 await client.disconnect()
 
-        # 排序
-        reverse = sort_order.lower() == "desc"
-        def get_sort_key(item):
-            key = (not item["is_dir"],)
-            sort_field = sort_by.lower()
-            if sort_field == "name":
-                key += (item["name"].lower(),)
-            elif sort_field == "size":
-                key += (item["size"],)
-            elif sort_field == "mtime":
-                key += (item["mtime"],)
-            else:
-                key += (item["name"].lower(),)
-            return key
-        entries.sort(key=get_sort_key, reverse=reverse)
-        
-        total_count = len(entries)
-        
-        # 分页
-        start_idx = (page_num - 1) * page_size
-        end_idx = start_idx + page_size
-        page_entries = entries[start_idx:end_idx]
-        
-        return page_entries, total_count
+        # Sort and paginate entries using shared utility
+        return sort_and_paginate_entries(entries, page_num, page_size, sort_by, sort_order)
 
     async def read_file(self, root: str, rel: str) -> bytes:
         try:

@@ -10,6 +10,10 @@ import logging
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse, Response
 from services.logging import LogService
+from services.adapters.utils import (
+    sort_and_paginate_entries,
+    extract_exif_data,
+)
 
 NS = {"d": "DAV:"}
 
@@ -109,30 +113,8 @@ class WebDAVAdapter:
                 "type": "dir" if is_dir else "file",
             })
 
-        # 排序所有条目
-        reverse = sort_order.lower() == "desc"
-        def get_sort_key(item):
-            key = (not item["is_dir"],)
-            sort_field = sort_by.lower()
-            if sort_field == "name":
-                key += (item["name"].lower(),)
-            elif sort_field == "size":
-                key += (item["size"],)
-            elif sort_field == "mtime":
-                key += (item["mtime"],)
-            else:
-                key += (item["name"].lower(),)
-            return key
-        all_entries.sort(key=get_sort_key, reverse=reverse)
-        
-        total_count = len(all_entries)
-
-        # 应用分页
-        start_idx = (page_num - 1) * page_size
-        end_idx = start_idx + page_size
-        page_entries = all_entries[start_idx:end_idx]
-
-        return page_entries, total_count
+        # Sort and paginate entries using shared utility
+        return sort_and_paginate_entries(all_entries, page_num, page_size, sort_by, sort_order)
 
     async def read_file(self, root: str, rel: str) -> bytes:
         url = self._build_url(rel)

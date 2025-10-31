@@ -11,6 +11,10 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from models import StorageAdapter
 from services.logging import LogService
+from services.adapters.utils import (
+    sort_and_paginate_entries,
+    build_stream_headers,
+)
 
 
 class S3Adapter:
@@ -90,27 +94,8 @@ class S3Adapter:
                             "type": "file",
                         })
 
-        # 在内存中排序和分页
-        reverse = sort_order.lower() == "desc"
-        def get_sort_key(item):
-            key = (not item["is_dir"],)
-            sort_field = sort_by.lower()
-            if sort_field == "name":
-                key += (item["name"].lower(),)
-            elif sort_field == "size":
-                key += (item["size"],)
-            elif sort_field == "mtime":
-                key += (item["mtime"],)
-            else:
-                key += (item["name"].lower(),)
-            return key
-        all_items.sort(key=get_sort_key, reverse=reverse)
-        
-        total_count = len(all_items)
-        start_idx = (page_num - 1) * page_size
-        end_idx = start_idx + page_size
-
-        return all_items[start_idx:end_idx], total_count
+        # Sort and paginate entries using shared utility
+        return sort_and_paginate_entries(all_items, page_num, page_size, sort_by, sort_order)
 
     async def read_file(self, root: str, rel: str) -> bytes:
         key = self._get_s3_key(rel)
@@ -318,16 +303,12 @@ class S3Adapter:
                         status_code=404, detail="File not found")
                 raise
 
+            # Parse range if provided
             start = 0
             end = file_size - 1
             status = 200
-            headers = {
-                "Accept-Ranges": "bytes",
-                "Content-Type": content_type,
-                "Content-Length": str(file_size),
-                "Content-Disposition": f"inline; filename=\"{quote(rel.split('/')[-1])}\""
-            }
-
+            is_partial = False
+            
             if range_header:
                 range_val = range_header.strip().partition("=")[2]
                 s, _, e = range_val.partition("-")
@@ -338,11 +319,14 @@ class S3Adapter:
                         raise HTTPException(
                             status_code=416, detail="Requested Range Not Satisfiable")
                     status = 206
-                    headers["Content-Length"] = str(end - start + 1)
-                    headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+                    is_partial = True
                 except ValueError:
                     raise HTTPException(
                         status_code=400, detail="Invalid Range header")
+            
+            # Build headers using shared utility
+            filename = rel.split('/')[-1]
+            headers = build_stream_headers(content_type, file_size, start, end, is_partial, filename)
 
             range_arg = f"bytes={start}-{end}"
 

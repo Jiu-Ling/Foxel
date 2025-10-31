@@ -9,6 +9,7 @@ import base64
 
 from models import StorageAdapter
 from .adapters.registry import runtime_registry
+from .adapters.utils import check_file_exists, extract_raw_thumbnail, sort_and_paginate_entries
 from api.response import page
 from .thumbnail import is_image_filename, is_raw_filename
 from services.processors.registry import get as get_processor
@@ -122,25 +123,12 @@ async def list_virtual_dir(path: str, page_num: int = 1, page_size: int = 50, so
     all_entries = adapter_entries + mount_entries
     
     if mount_entries:
-        reverse = sort_order.lower() == "desc"
-        def get_sort_key(item):
-            key = (not item.get("is_dir"),)
-            sort_field = sort_by.lower()
-            if sort_field == "name":
-                key += (item["name"].lower(),)
-            elif sort_field == "size":
-                key += (item.get("size", 0),)
-            elif sort_field == "mtime":
-                key += (item.get("mtime", 0),)
-            else:
-                key += (item["name"].lower(),)
-            return key
-        all_entries.sort(key=get_sort_key, reverse=reverse)
-        
-        total_entries = adapter_total + len(mount_entries)
-        start_idx = (page_num - 1) * page_size
-        end_idx = start_idx + page_size
-        page_entries = all_entries[start_idx:end_idx]
+        # When we have mount entries, we need to re-sort and re-paginate all entries
+        # Note: adapter_entries may already be paginated, so we need to handle this carefully
+        # For simplicity, we'll just sort and paginate the combined list
+        page_entries, total_entries = sort_and_paginate_entries(
+            all_entries, page_num, page_size, sort_by, sort_order
+        )
         return page(page_entries, total_entries, page_num, page_size)
     
     return page(adapter_entries, adapter_total, page_num, page_size)
@@ -170,15 +158,9 @@ async def write_file_stream(path: str, data_iter: AsyncIterator[bytes], overwrit
     adapter_instance, _, root, rel = await resolve_adapter_and_rel(path)
     if rel.endswith('/'):
         raise HTTPException(400, detail="Invalid file path")
-    exists_func = getattr(adapter_instance, "exists", None)
-    if not overwrite and callable(exists_func):
-        try:
-            if await exists_func(root, rel):
-                raise HTTPException(409, detail="Destination exists")
-        except HTTPException:
-            raise
-        except Exception:
-            pass
+    
+    # Check if file exists using shared utility
+    await check_file_exists(adapter_instance, root, rel, overwrite)
 
     size = 0
     stream_func = getattr(adapter_instance, "write_file_stream", None)
@@ -370,24 +352,11 @@ async def stream_file(path: str, range_header: str | None):
     if not rel or rel.endswith('/'):
         raise HTTPException(400, detail="Path is a directory")
     if is_raw_filename(rel):
-        import rawpy
-        from PIL import Image
         import io
         try:
             raw_data = await read_file(path)
             try:
-                import rawpy
-                with rawpy.imread(io.BytesIO(raw_data)) as raw:
-                    try:
-                        thumb = raw.extract_thumb()
-                    except rawpy.LibRawNoThumbnailError:
-                        thumb = None
-                    
-                    if thumb is not None and thumb.format in [rawpy.ThumbFormat.JPEG, rawpy.ThumbFormat.BITMAP]:
-                        im = Image.open(io.BytesIO(thumb.data))
-                    else:
-                        rgb = raw.postprocess(use_camera_wb=False, use_auto_wb=True, output_bps=8)
-                        im = Image.fromarray(rgb)
+                im = extract_raw_thumbnail(raw_data)
             except Exception as e:
                 print(f"rawpy processing failed: {e}")
                 raise e
