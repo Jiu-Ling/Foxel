@@ -33,17 +33,17 @@ def sort_and_paginate_entries(
     
     def get_sort_key(item):
         # Directories first, then sort by specified field
-        key = (not item["is_dir"],)
+        key = (not item.get("is_dir", False),)
         sort_field = sort_by.lower()
         
         if sort_field == "name":
-            key += (item["name"].lower(),)
+            key += (item.get("name", "").lower(),)
         elif sort_field == "size":
-            key += (item["size"],)
+            key += (item.get("size", 0),)
         elif sort_field == "mtime":
-            key += (item["mtime"],)
+            key += (item.get("mtime", 0),)
         else:  # Default to name
-            key += (item["name"].lower(),)
+            key += (item.get("name", "").lower(),)
         return key
     
     entries.sort(key=get_sort_key, reverse=reverse)
