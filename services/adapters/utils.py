@@ -1,9 +1,10 @@
 """
 Utility functions shared across storage adapters.
 """
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Any
 import asyncio
 from pathlib import Path
+from fastapi import HTTPException
 
 
 def sort_and_paginate_entries(
@@ -156,3 +157,57 @@ async def extract_exif_data(file_path: Path) -> Dict[str, str] | None:
     except Exception:
         pass
     return None
+
+
+async def check_file_exists(adapter_instance: Any, root: str, rel: str, overwrite: bool) -> None:
+    """
+    Check if a file exists at the destination and raise an error if not overwriting.
+    
+    Args:
+        adapter_instance: The storage adapter instance
+        root: Root path
+        rel: Relative path
+        overwrite: Whether to allow overwriting
+    
+    Raises:
+        HTTPException: If file exists and overwrite is False
+    """
+    exists_func = getattr(adapter_instance, "exists", None)
+    if not overwrite and callable(exists_func):
+        try:
+            if await exists_func(root, rel):
+                raise HTTPException(409, detail="Destination exists")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+
+def extract_raw_thumbnail(data: bytes):
+    """
+    Extract thumbnail from RAW image data.
+    
+    Args:
+        data: Raw image file data
+    
+    Returns:
+        PIL Image object
+        
+    Raises:
+        Exception: If thumbnail extraction fails
+    """
+    import io
+    import rawpy
+    from PIL import Image
+    
+    with rawpy.imread(io.BytesIO(data)) as raw:
+        try:
+            thumb = raw.extract_thumb()
+        except rawpy.LibRawNoThumbnailError:
+            thumb = None
+        
+        if thumb is not None and thumb.format in [rawpy.ThumbFormat.JPEG, rawpy.ThumbFormat.BITMAP]:
+            return Image.open(io.BytesIO(thumb.data))
+        else:
+            rgb = raw.postprocess(use_camera_wb=False, use_auto_wb=True, output_bps=8)
+            return Image.fromarray(rgb)

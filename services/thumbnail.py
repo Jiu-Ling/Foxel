@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 from typing import Tuple
 from fastapi import HTTPException
+from services.adapters.utils import extract_raw_thumbnail
 
 ALLOWED_EXT = {"jpg", "jpeg", "png", "webp", "gif", "bmp",
                "tiff", "arw", "cr2", "cr3", "nef", "rw2", "orf", "pef", "dng"}
@@ -44,23 +45,10 @@ def generate_thumb(data: bytes, w: int, h: int, fit: str, is_raw: bool = False) 
     from PIL import Image
     if is_raw:
         try:
-            import rawpy
-            with rawpy.imread(io.BytesIO(data)) as raw:
-                try:
-                    thumb = raw.extract_thumb()
-                except rawpy.LibRawNoThumbnailError:
-                    thumb = None
-
-                if thumb is not None and thumb.format in [rawpy.ThumbFormat.JPEG, rawpy.ThumbFormat.BITMAP]:
-                    im = Image.open(io.BytesIO(thumb.data))
-                else:
-                    rgb = raw.postprocess(
-                        use_camera_wb=False, use_auto_wb=True, output_bps=8)
-                    im = Image.fromarray(rgb)
+            im = extract_raw_thumbnail(data)
         except Exception as e:
             print(f"rawpy processing failed: {e}")
             raise e
-
     else:
         im = Image.open(io.BytesIO(data))
 
